@@ -5,19 +5,24 @@ import com.shoes.ecommerce.service.OrderService;
 import com.shoes.ecommerce.service.NotificationService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import com.shoes.ecommerce.entity.User;
+import com.shoes.ecommerce.repository.UserRepository;
 import org.springframework.web.bind.annotation.*;
 import java.security.Principal;
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/orders")
 public class OrderController {
     private final OrderService orderService;
     private final NotificationService notificationService;
+    private final UserRepository userRepository;
 
-    public OrderController(OrderService orderService, NotificationService notificationService){
+    public OrderController(OrderService orderService, NotificationService notificationService, UserRepository userRepository){
         this.orderService = orderService;
         this.notificationService = notificationService;
+        this.userRepository = userRepository;
     }
 
     @PostMapping
@@ -101,5 +106,37 @@ public class OrderController {
         }catch(Exception ex){ /* log silently */ }
 
         return ResponseEntity.ok(o);
+    }
+
+    @PutMapping("/{id}/cancel")
+    public ResponseEntity<?> cancelByUser(@PathVariable Long id,
+                                          @RequestBody(required = false) Map<String, String> body,
+                                          Principal principal){
+        if(principal == null) return ResponseEntity.status(401).body(Map.of("message", "Unauthorized"));
+
+        String reason = body == null ? null : body.get("reason");
+        try{
+            OrderEntity cancelled = orderService.cancelPendingOrderByUser(id, principal.getName(), reason);
+            notifyAdminsUserCancelled(cancelled, principal.getName());
+            return ResponseEntity.ok(Map.of(
+                    "message", "Hủy đơn thành công",
+                    "order", cancelled
+            ));
+        }catch(IllegalArgumentException ex){
+            return ResponseEntity.badRequest().body(Map.of("message", ex.getMessage()));
+        }
+    }
+
+    private void notifyAdminsUserCancelled(OrderEntity order, String username){
+        String title = "Đơn hàng bị hủy bởi người dùng";
+        String body = "Người dùng " + username + " đã hủy đơn #" + order.getId() + ".";
+        for(User admin : userRepository.findAll()){
+            if(admin.getRole() != null && "ADMIN".equalsIgnoreCase(admin.getRole().name())){
+                String deviceId = "admin-user-" + admin.getId();
+                try {
+                    notificationService.sendToDevice(deviceId, title, body);
+                } catch (Exception ignored) {}
+            }
+        }
     }
 }

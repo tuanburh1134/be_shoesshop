@@ -10,6 +10,7 @@ public class OrderItem {
     private Long id;
 
     private String name;
+    private String color;
     private String size;
     private Integer qty;
     private Double price;
@@ -26,6 +27,8 @@ public class OrderItem {
     public void setId(Long id) { this.id = id; }
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }
+    public String getColor() { return color; }
+    public void setColor(String color) { this.color = color; }
     public String getSize() { return size; }
     public void setSize(String size) { this.size = size; }
     public Integer getQty() { return qty; }
