@@ -24,9 +24,6 @@ public class PaymentController {
 
     @PostMapping("/payos/create")
     public ResponseEntity<?> createPayOsPayment(@RequestBody PayOsCreateRequest request, Principal principal) {
-        if (principal == null) {
-            return ResponseEntity.status(401).body(Map.of("message", "Unauthorized"));
-        }
         if (request == null || request.getOrderId() == null) {
             return ResponseEntity.badRequest().body(Map.of("message", "Thiếu orderId"));
         }
@@ -35,7 +32,8 @@ public class PaymentController {
         if (opt.isEmpty()) return ResponseEntity.notFound().build();
         OrderEntity order = opt.get();
 
-        if (!canAccessOrder(order, principal.getName(), isAdmin())) {
+        String caller = principal == null ? null : principal.getName();
+        if (!canAccessOrder(order, caller, isAdmin())) {
             return ResponseEntity.status(403).body(Map.of("message", "Forbidden"));
         }
 
@@ -49,14 +47,12 @@ public class PaymentController {
 
     @GetMapping("/{orderId}/status")
     public ResponseEntity<?> getPaymentStatus(@PathVariable Long orderId, Principal principal) {
-        if (principal == null) {
-            return ResponseEntity.status(401).body(Map.of("message", "Unauthorized"));
-        }
         var opt = orderService.findById(orderId);
         if (opt.isEmpty()) return ResponseEntity.notFound().build();
         OrderEntity order = opt.get();
 
-        if (!canAccessOrder(order, principal.getName(), isAdmin())) {
+        String caller = principal == null ? null : principal.getName();
+        if (!canAccessOrder(order, caller, isAdmin())) {
             return ResponseEntity.status(403).body(Map.of("message", "Forbidden"));
         }
 
@@ -74,6 +70,8 @@ public class PaymentController {
 
     private boolean canAccessOrder(OrderEntity order, String caller, boolean admin) {
         if (admin) return true;
+        // Guest checkout: anonymous caller can access orders that are not bound to a user account.
+        if (order != null && order.getUser() == null && (caller == null || caller.isBlank())) return true;
         if (order == null || order.getUser() == null) return false;
         return caller != null && caller.equals(order.getUser().getUsername());
     }
