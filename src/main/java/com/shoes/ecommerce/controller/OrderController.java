@@ -133,9 +133,38 @@ public class OrderController {
         }
     }
 
+    @PutMapping("/{id}/received")
+    public ResponseEntity<?> confirmReceivedByUser(@PathVariable Long id, Principal principal){
+        if(principal == null) return ResponseEntity.status(401).body(Map.of("message", "Unauthorized"));
+
+        try{
+            OrderEntity updated = orderService.confirmReceivedByUser(id, principal.getName());
+            notifyAdminsUserReceived(updated, principal.getName());
+            return ResponseEntity.ok(Map.of(
+                    "message", "Xác nhận nhận hàng thành công",
+                    "order", updated
+            ));
+        }catch(IllegalArgumentException ex){
+            return ResponseEntity.badRequest().body(Map.of("message", ex.getMessage()));
+        }
+    }
+
     private void notifyAdminsUserCancelled(OrderEntity order, String username){
         String title = "Đơn hàng bị hủy bởi người dùng";
         String body = "Người dùng " + username + " đã hủy đơn #" + order.getId() + ".";
+        for(User admin : userRepository.findAll()){
+            if(admin.getRole() != null && "ADMIN".equalsIgnoreCase(admin.getRole())){
+                String deviceId = "admin-user-" + admin.getId();
+                try {
+                    notificationService.createNotification(admin, deviceId, title + ": " + body);
+                } catch (Exception ignored) {}
+            }
+        }
+    }
+
+    private void notifyAdminsUserReceived(OrderEntity order, String username){
+        String title = "Người dùng đã nhận hàng";
+        String body = "Người dùng " + username + " đã xác nhận nhận đơn #" + order.getId() + ".";
         for(User admin : userRepository.findAll()){
             if(admin.getRole() != null && "ADMIN".equalsIgnoreCase(admin.getRole())){
                 String deviceId = "admin-user-" + admin.getId();

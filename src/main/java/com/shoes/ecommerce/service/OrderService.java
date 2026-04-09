@@ -164,6 +164,26 @@ public class OrderService {
         return orderRepository.save(order);
     }
 
+    public OrderEntity confirmReceivedByUser(Long orderId, String username){
+        if(orderId == null) throw new IllegalArgumentException("Đơn hàng không hợp lệ");
+        if(username == null || username.isBlank()) throw new IllegalArgumentException("Bạn cần đăng nhập để xác nhận nhận hàng");
+
+        var opt = orderRepository.findById(orderId);
+        if(opt.isEmpty()) throw new IllegalArgumentException("Không tìm thấy đơn hàng");
+        OrderEntity order = opt.get();
+
+        if(order.getUser() == null || order.getUser().getUsername() == null || !order.getUser().getUsername().equals(username)){
+            throw new IllegalArgumentException("Bạn không có quyền cập nhật đơn này");
+        }
+
+        if(!"approved".equalsIgnoreCase(String.valueOf(order.getStatus()))){
+            throw new IllegalArgumentException("Chỉ có thể xác nhận nhận hàng khi đơn đang giao");
+        }
+
+        order.setStatus("completed");
+        return orderRepository.save(order);
+    }
+
     private boolean tryDecrementFromInventory(Product p, String color, String size, int need){
         if(size == null || size.trim().isEmpty()) return false;
         String invRaw = p.getInventory();
