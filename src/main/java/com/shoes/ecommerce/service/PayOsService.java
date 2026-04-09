@@ -102,14 +102,43 @@ public class PayOsService {
             throw new IllegalStateException("PayOS không trả dữ liệu");
         }
 
-        Object dataObj = response.getBody().get("data");
-        Map<String, Object> data = (dataObj instanceof Map<?, ?> m)
-                ? (Map<String, Object>) m
-                : Collections.emptyMap();
+        Map<String, Object> bodyMap = response.getBody();
+        Map<String, Object> data = extractDataSection(bodyMap);
 
-        String checkoutUrl = asString(data.get("checkoutUrl"));
-        String qrCode = asString(data.get("qrCode"));
-        String paymentLinkId = asString(data.get("paymentLinkId"));
+        String checkoutUrl = firstNonBlank(
+            asString(data.get("checkoutUrl")),
+            asString(data.get("checkout_url")),
+            asString(data.get("paymentUrl")),
+            asString(data.get("payment_url")),
+            asString(bodyMap.get("checkoutUrl")),
+            asString(bodyMap.get("checkout_url")),
+            asString(bodyMap.get("paymentUrl")),
+            asString(bodyMap.get("payment_url"))
+        );
+
+        String qrCode = firstNonBlank(
+            asString(data.get("qrCode")),
+            asString(data.get("qr_code")),
+            asString(bodyMap.get("qrCode")),
+            asString(bodyMap.get("qr_code"))
+        );
+
+        String paymentLinkId = firstNonBlank(
+            asString(data.get("paymentLinkId")),
+            asString(data.get("payment_link_id")),
+            asString(data.get("id")),
+            asString(bodyMap.get("paymentLinkId")),
+            asString(bodyMap.get("payment_link_id")),
+            asString(bodyMap.get("id"))
+        );
+
+        if (isBlank(checkoutUrl) && !isBlank(paymentLinkId)) {
+            checkoutUrl = "https://pay.payos.vn/web/" + paymentLinkId;
+        }
+
+        if (isBlank(qrCode) && !isBlank(checkoutUrl)) {
+            qrCode = "https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=" + urlEncode(checkoutUrl);
+        }
 
         order.setPayosOrderCode(orderCode);
         order.setPayosPaymentLinkId(paymentLinkId);
@@ -118,6 +147,35 @@ public class PayOsService {
         orderRepository.save(order);
 
         return buildStatusResponse(order, checkoutUrl, qrCode);
+    }
+
+    private Map<String, Object> extractDataSection(Map<String, Object> bodyMap) {
+        if (bodyMap == null || bodyMap.isEmpty()) return Collections.emptyMap();
+        Object dataObj = bodyMap.get("data");
+        if (dataObj instanceof Map<?, ?> m) {
+            Map<String, Object> out = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> e : m.entrySet()) {
+                if (e.getKey() != null) out.put(String.valueOf(e.getKey()), e.getValue());
+            }
+            return out;
+        }
+        return bodyMap;
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) return "";
+        for (String v : values) {
+            if (!isBlank(v)) return v;
+        }
+        return "";
+    }
+
+    private String urlEncode(String value) {
+        try {
+            return java.net.URLEncoder.encode(value, StandardCharsets.UTF_8);
+        } catch (Exception ex) {
+            return value;
+        }
     }
 
     public Map<String, Object> getOrderPaymentStatus(OrderEntity order) {
