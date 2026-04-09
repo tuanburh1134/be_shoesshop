@@ -17,6 +17,8 @@ import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -34,6 +36,15 @@ public class ChatController {
 
     @Value("${gemini.api.endpoint-template:https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent}")
     private String geminiEndpointTemplate;
+
+    @Value("${gemini.api.fallback-models:gemini-2.0-flash,gemini-1.5-flash}")
+    private String geminiFallbackModels;
+
+    @Value("${gemini.retry.max-attempts:3}")
+    private int geminiMaxAttempts;
+
+    @Value("${gemini.retry.initial-delay-ms:500}")
+    private long geminiRetryInitialDelayMs;
 
     @Value("${gemini.system.instruction:Bạn là trợ lý AI của website bán giày. Trả lời ngắn gọn, chính xác, thân thiện bằng tiếng Việt. Ưu tiên tư vấn sản phẩm, size, màu, giá, cách đặt hàng và thanh toán. Nếu không chắc chắn, hãy nói rõ giới hạn và gợi ý người dùng liên hệ admin.}")
     private String systemInstruction;
@@ -57,8 +68,6 @@ public class ChatController {
                     .body(new ChatResponse(null, "Chưa cấu hình GEMINI_API_KEY (hoặc gemini.api.key)"));
         }
         try{
-            String endpoint = buildEndpointUrl();
-            String url = endpoint + (endpoint.contains("?") ? "&" : "?") + "key=" + geminiApiKey;
             Map<String,Object> payload = new HashMap<>();
             Map<String,Object> part = new HashMap<>();
             part.put("text", req.getMessage());
@@ -82,16 +91,78 @@ public class ChatController {
             headers.setContentType(MediaType.APPLICATION_JSON);
             HttpEntity<Map<String,Object>> entity = new HttpEntity<>(payload, headers);
 
-            ResponseEntity<String> res = restTemplate.postForEntity(url, entity, String.class);
-            if(!res.getStatusCode().is2xxSuccessful()){
-                String msg = "Gemini API error: " + res.getStatusCode();
-                log.warn(msg + " body={} " , res.getBody());
-                return ResponseEntity.status(res.getStatusCode())
-                        .body(new ChatResponse(null, msg));
+            int attempts = Math.max(1, geminiMaxAttempts);
+            long initialDelay = Math.max(100L, geminiRetryInitialDelayMs);
+            List<String> models = buildCandidateModels();
+            String lastError = null;
+
+            for(int modelIdx = 0; modelIdx < models.size(); modelIdx++){
+                String model = models.get(modelIdx);
+                boolean hasNextModel = modelIdx < models.size() - 1;
+
+                for(int attempt = 1; attempt <= attempts; attempt++){
+                    String endpoint = buildEndpointUrl(model);
+                    String url = endpoint + (endpoint.contains("?") ? "&" : "?") + "key=" + geminiApiKey;
+
+                    try{
+                        ResponseEntity<String> res = restTemplate.postForEntity(url, entity, String.class);
+                        if(!res.getStatusCode().is2xxSuccessful()){
+                            lastError = "Gemini API error: " + res.getStatusCode();
+                            log.warn("{} model={} body={}", lastError, model, res.getBody());
+                            if(isRetryableStatus(res.getStatusCode().value()) && attempt < attempts){
+                                sleepBeforeRetry(attempt, initialDelay);
+                                continue;
+                            }
+                            if(isRetryableStatus(res.getStatusCode().value()) && hasNextModel){
+                                break;
+                            }
+                            return ResponseEntity.status(res.getStatusCode())
+                                    .body(new ChatResponse(null, lastError));
+                        }
+
+                        String body = res.getBody();
+                        String reply = extractText(body);
+                        return ResponseEntity.ok(new ChatResponse(reply, null));
+                    }catch(HttpStatusCodeException ex){
+                        int status = ex.getStatusCode().value();
+                        String providerMessage = extractProviderErrorMessage(ex.getResponseBodyAsString());
+                        lastError = "Gemini API error: " + ex.getStatusCode() + (providerMessage.isBlank() ? "" : " - " + providerMessage);
+                        log.warn("Gemini call failed model={} attempt={}/{} status={} body={}", model, attempt, attempts, ex.getStatusCode(), ex.getResponseBodyAsString());
+
+                        if(isRetryableStatus(status) && attempt < attempts){
+                            sleepBeforeRetry(attempt, initialDelay);
+                            continue;
+                        }
+                        if(isRetryableStatus(status) && hasNextModel){
+                            break;
+                        }
+                        if(status == 503){
+                            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                                    .body(new ChatResponse(null, "Hệ thống AI đang quá tải tạm thời. Vui lòng thử lại sau ít phút."));
+                        }
+                        return ResponseEntity.status(ex.getStatusCode())
+                                .body(new ChatResponse(null, lastError));
+                    }catch(ResourceAccessException ex){
+                        lastError = "Không kết nối được tới Gemini API: " + ex.getMessage();
+                        log.warn("Cannot reach Gemini API model={} attempt={}/{}", model, attempt, attempts, ex);
+                        if(attempt < attempts){
+                            sleepBeforeRetry(attempt, initialDelay);
+                            continue;
+                        }
+                        if(hasNextModel){
+                            break;
+                        }
+                        return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+                                .body(new ChatResponse(null, lastError));
+                    }
+                }
             }
-            String body = res.getBody();
-            String reply = extractText(body);
-            return ResponseEntity.ok(new ChatResponse(reply, null));
+
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(new ChatResponse(null,
+                            (lastError == null || lastError.isBlank())
+                                    ? "Hệ thống AI đang bận. Vui lòng thử lại sau."
+                                    : "Hệ thống AI đang bận. " + lastError));
         }catch(HttpStatusCodeException ex){
             String msg = "Gemini API error: " + ex.getStatusCode();
             log.error(msg + " body={} ", ex.getResponseBodyAsString());
@@ -122,15 +193,54 @@ public class ChatController {
         return "Không có phản hồi từ AI.";
     }
 
-    private String buildEndpointUrl(){
+    private List<String> buildCandidateModels(){
+        List<String> models = new ArrayList<>();
+        if(geminiModel != null && !geminiModel.isBlank()) models.add(geminiModel.trim());
+
+        if(geminiFallbackModels != null && !geminiFallbackModels.isBlank()){
+            String[] arr = geminiFallbackModels.split(",");
+            for(String raw : arr){
+                String m = raw == null ? "" : raw.trim();
+                if(m.isEmpty()) continue;
+                if(models.stream().noneMatch(x -> x.equalsIgnoreCase(m))){
+                    models.add(m);
+                }
+            }
+        }
+
+        if(models.isEmpty()) models.add("gemini-1.5-flash");
+        return models;
+    }
+
+    private boolean isRetryableStatus(int code){
+        return code == 429 || code == 503 || code == 504 || code >= 500;
+    }
+
+    private void sleepBeforeRetry(int attempt, long initialDelayMs){
+        long delay = initialDelayMs * Math.max(1, attempt);
+        try{ Thread.sleep(delay); }catch(InterruptedException ie){ Thread.currentThread().interrupt(); }
+    }
+
+    private String extractProviderErrorMessage(String body){
+        try{
+            JsonNode root = mapper.readTree(body);
+            JsonNode msg = root.path("error").path("message");
+            if(msg.isTextual()) return msg.asText("");
+        }catch(Exception ignored){}
+        return "";
+    }
+
+    private String buildEndpointUrl(String model){
         String template = geminiEndpointTemplate == null || geminiEndpointTemplate.isBlank()
                 ? "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent"
                 : geminiEndpointTemplate.trim();
 
-        if(template.contains("%s")) return String.format(template, geminiModel);
-        if(template.contains("{model}")) return template.replace("{model}", geminiModel);
+        String finalModel = (model == null || model.isBlank()) ? "gemini-1.5-flash" : model.trim();
+
+        if(template.contains("%s")) return String.format(template, finalModel);
+        if(template.contains("{model}")) return template.replace("{model}", finalModel);
         if(template.endsWith(":generateContent")) return template;
-        if(template.endsWith("/")) return template + geminiModel + ":generateContent";
-        return template + "/" + geminiModel + ":generateContent";
+        if(template.endsWith("/")) return template + finalModel + ":generateContent";
+        return template + "/" + finalModel + ":generateContent";
     }
 }
