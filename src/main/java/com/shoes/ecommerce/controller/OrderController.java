@@ -131,10 +131,10 @@ public class OrderController {
         String title = "Đơn hàng bị hủy bởi người dùng";
         String body = "Người dùng " + username + " đã hủy đơn #" + order.getId() + ".";
         for(User admin : userRepository.findAll()){
-            if(admin.getRole() != null && "ADMIN".equalsIgnoreCase(admin.getRole().name())){
+            if(admin.getRole() != null && "ADMIN".equalsIgnoreCase(admin.getRole())){
                 String deviceId = "admin-user-" + admin.getId();
                 try {
-                    notificationService.sendToDevice(deviceId, title, body);
+                    notificationService.createNotification(admin, deviceId, title + ": " + body);
                 } catch (Exception ignored) {}
             }
         }
