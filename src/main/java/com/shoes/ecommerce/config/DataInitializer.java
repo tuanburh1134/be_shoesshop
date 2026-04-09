@@ -17,10 +17,28 @@ public class DataInitializer {
     CommandLineRunner initUsers(UserRepository userRepository) {
         return args -> {
             BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
-            if (!userRepository.existsByUsername("admin")) {
-                User admin = new User("admin", encoder.encode("admin"), "admin@example.com", "admin");
+            User admin = userRepository.findByUsername("admin").orElse(null);
+
+            if (admin == null) {
+                User created = new User("admin", encoder.encode("admin"), "admin@example.com", "admin");
+                userRepository.save(created);
+                logger.warn("Default admin created: admin / admin");
+                return;
+            }
+
+            boolean changed = false;
+            if (admin.getRole() == null || !"admin".equalsIgnoreCase(admin.getRole())) {
+                admin.setRole("admin");
+                changed = true;
+            }
+            if (admin.getEmail() == null || admin.getEmail().isBlank()) {
+                admin.setEmail("admin@example.com");
+                changed = true;
+            }
+
+            if (changed) {
                 userRepository.save(admin);
-                logger.info("Default admin created: admin / admin");
+                logger.warn("Recovered admin account metadata for username=admin (role/email corrected)");
             }
         };
     }
