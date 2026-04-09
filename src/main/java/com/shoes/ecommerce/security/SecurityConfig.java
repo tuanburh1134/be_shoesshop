@@ -52,6 +52,8 @@ public class SecurityConfig {
             .requestMatchers(new AntPathRequestMatcher("/api/products/**", "PUT")).hasRole("ADMIN")
             .requestMatchers(new AntPathRequestMatcher("/api/products/**", "DELETE")).hasRole("ADMIN")
             .requestMatchers(new AntPathRequestMatcher("/api/orders", "POST")).permitAll()
+            .requestMatchers(new AntPathRequestMatcher("/api/payments/payos/create", "POST")).permitAll()
+            .requestMatchers(new AntPathRequestMatcher("/api/payments/*/status", "GET")).permitAll()
             .requestMatchers(new AntPathRequestMatcher("/api/payments/payos/webhook", "POST")).permitAll()
             .requestMatchers(new AntPathRequestMatcher("/h2-console/**")).permitAll()
             .anyRequest().authenticated()
