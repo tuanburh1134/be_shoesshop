@@ -57,8 +57,14 @@ public class OrderController {
     }
 
     @GetMapping("{id}")
-    public ResponseEntity<OrderEntity> getOne(@PathVariable Long id, Principal principal){
-        var opt = orderService.findById(id);
+    public ResponseEntity<OrderEntity> getOne(@PathVariable String id, Principal principal){
+        Long orderId;
+        try{
+            orderId = Long.parseLong(id);
+        }catch(Exception ex){
+            return ResponseEntity.badRequest().build();
+        }
+        var opt = orderService.findById(orderId);
         if(opt.isEmpty()) return ResponseEntity.notFound().build();
         var o = opt.get();
         boolean isAdmin = false;
